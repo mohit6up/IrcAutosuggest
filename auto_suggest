@@ -1,0 +1,174 @@
+#!/usr/bin/env python
+
+import math
+import sys
+
+"""
+This script retrieves top 10 users and channels that start with a string 
+(auto-complete) for a user. It determines the order using frecency. The data
+structure used is a trie for fast retrieval.
+
+Input format:
+It reads in a user's historical interactions where each row is of the form
+(channel/user, timestamp). It also reads in all channels in an organization
+independent of whether a user has visited those channels in the past or not.
+That file is just a list of channel names.
+"""
+
+class Node:
+    """
+    A node in the trie. The frecency is an integer only if the channel or user has been interacted with.
+    """
+    def __init__(self, val):
+        self.name = val
+        self.children = None
+        self.frecency = None
+
+def read_lines(current_timestamp, filename):
+    """
+    Read user's interaction history and compute frecencies.
+    """
+    day_in_sec = float(24*60*60)
+    entity_dic = {}
+    final = []
+    with open(filename) as infile:
+        for line in infile:
+            entity, timestamp = line.split(",")
+            timestamp = int(timestamp)
+            delta = (current_timestamp - timestamp)/day_in_sec
+            if delta < 0:
+                continue
+            frecency = math.exp((-1 * math.log(2) * delta)/float(7))
+            if entity in entity_dic:
+                entity_dic[entity] += frecency
+            else:
+                entity_dic[entity] = frecency
+    for entity in entity_dic:
+        final.append([entity, entity_dic[entity]])
+    return final
+
+def create_trie(l):
+    """We represent each string as nodes in a trie. If a string is of the form
+    "#general", that would lead to the nodes like: # -> #g -> #ge -> ..., where
+    -> denotes a parent node to child node relationship. When we reach the end
+    of the string, for the last node, we also add the value of the frecency
+    associated with that node. We also separately maintain a list of nodes in 
+    the tree.
+    """
+    for s in l:
+        previous = root
+        accumulator = []
+        if type(s) is str:
+            s = [s.strip(), 0]
+        length = len(s[0])
+        for i, char in enumerate(s[0]):
+            accumulator += char
+            joined = "".join(accumulator)
+            if joined in nodes:
+                if i == length - 1:
+                    if not nodes[joined].frecency:
+                        nodes[joined].frecency = s[1]
+                    elif s[1] > nodes[joined].frecency:
+                        nodes[joined].frecency = s[1]
+            else:
+                new_node = Node(joined)
+                if i == length - 1:
+                    new_node.frecency = s[1]
+                nodes[joined] = new_node
+                if previous.children is None:
+                    previous.children = [new_node]
+                else:
+                    previous.children.append(new_node)
+            previous = nodes[joined]
+
+def add_all_users_channels(filename):
+    """Add all available entities to the trie"""
+    with open(filename) as infile:
+        create_trie(infile)
+
+def depth_first_search(start):
+    """A depth first search to find nodes with frecencies greater than zero.
+    Non-zero values include entities the user has interacted with before.
+    """
+    candidates = []
+    queue = []
+    queue.insert(0, start)
+    while len(queue) > 0:
+        current = queue.pop()
+        if current.frecency >= 0:
+            candidates.append([current.name, current.frecency])
+        if current.children:
+            for c in current.children:
+                queue.insert(0, c)
+    return candidates
+
+def start_nodes(s):
+    """
+    Since we want to search for both channels and users if the prefix
+    '#' or '@' is not specified, we add those prefixes to create two search
+    terms. One corresponding to the users and the other corresponding to the
+    channels. If either of the prefixes is already indicated, we search for that directly.
+    """
+    starts = []
+    if not s.startswith("@") and not s.startswith("#"):
+        for prefix in ["@", "#"]:
+            j = prefix + s
+            if j in nodes:
+                starts.append(nodes[j])
+    else:
+        if s in nodes:
+            starts = [nodes[s]]
+    return starts
+
+def find(s):
+    """
+    Find channels or users whose names start with the supplied string. Return results in
+    descending order of score. If an exact search is found, insert that into the first position.
+    """
+    candidates = []
+    starts = start_nodes(s)
+    if len(starts) == 0:
+        return None
+    for start in starts:
+        candidates = candidates + depth_first_search(start)
+    if len(candidates) == 0:
+        return None
+    else:
+        candidates.sort(key = lambda k: (-k[1], k[0]))
+        count = 0
+        final_results = []
+        for i in candidates:
+            if s == candidates[0]:
+                final_results.insert(0, i)
+            else:
+                final_results.append(i)
+        return final_results[:10]
+
+def pretty_print(results):
+    for item in results:
+        print item[0]
+
+def main(arguments):
+    """ Read in raw data, create frecencies, populate trie with channels and
+    users the user has interacted with. Also, populate with all known channels
+    and users. Then search the trie for nodes that are complete names of users
+    and channels.
+    """
+    frecencies = read_lines(int(arguments[1]), arguments[2])
+    # Initialize the root node and the nodes entity_dictionary
+    global root, nodes
+    root = Node("")
+    nodes = {"": root}
+    create_trie(frecencies)
+    add_all_users_channels(arguments[3])
+    results = find(arguments[4])
+    pretty_print(results)
+
+if __name__ == '__main__':
+    if len(sys.argv) != 5:
+        print("""
+            We need 4 arguments: timestamp user_history_file all_channels_file query:
+            e.g.:- ./quick_switcher 1501094747 user_history.csv all_channels.csv 'gen'
+            """)
+        sys.exit()
+    main(sys.argv)
